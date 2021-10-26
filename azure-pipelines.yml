@@ -1,0 +1,158 @@
+trigger:
+  branches:
+    include:
+      - develop
+      - master
+
+variables:
+  - name : artifactName
+    value : 'ZipProjects'
+
+  - name: actorProjectZip
+    value : actor.zip
+
+  ## C# projects configuration
+  - name : buildConf
+    value : 'Release'
+  - name :  output
+    value : '$(Build.ArtifactStagingDirectory)/publish'
+
+  ## Azure functions       
+  ## Main Azure function       
+  - name :  mainProject
+    value : '**/Hotel.Services.Sorting.API.csproj'
+
+  - name : testProject
+    value: '**/*Test/Hotel.Services.Sorting.BusinessTest.csproj'
+  # For Service fabric projects
+  # Service Fabric
+  # - name : actorProject
+  #   value : '**/<Actor project>.csproj'
+  # - name : actorProjectDirToZip
+  #   value: '<parent Dir>/<Rule Actor project dir>'
+
+  - name : sqlScript
+    value : 'myScriptSQL'
+
+# Pipeline to Building
+# Break down in 2 stages
+# First -> Simulate a predeploy (i.e. restore a Database scheme)
+# Second -> Deploy an Azure function and optional a Rule Actor into a Service Fabric
+stages:
+
+  - stage: preDeploy
+    displayName: 'Pre Deploy (SQL script)'
+
+    jobs:
+      - job: intialStoreProcedure
+        # Remove this condition, or set a new branch name, to perform a full db rebuild using  $(sqlScript).sql
+        condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'sqlInvoke'))
+        displayName: 'Initial Store procedures'
+        pool:
+          vmImage: 'windows-latest'
+        steps: 
+
+        - task: ExtractFiles@1
+          inputs:
+            archiveFilePatterns: '$(sqlScript).zip'
+            destinationFolder: 'D:\a\1\s\'
+            cleanDestinationFolder: false
+            overwriteExistingFiles: true
+          displayName: 'Unzip script sql'
+          
+        - task: PowerShell@2
+          inputs:
+            targetType: 'inline'
+            # ConnectionString is a Pipeline Secrete Variable
+            script: 'Invoke-SqlCmd -ConnectionString "$(ConnectionString)" -InputFile D:\a\1\s\$(sqlScript).sql -Verbose' 
+          displayName: 'Executing script $(sqlScript)'
+
+        - task: PowerShell@2
+          inputs:
+            targetType: 'inline'
+            script: 'Invoke-SqlCmd -ConnectionString "$(ConnectionStringProd)" -InputFile D:\a\1\s\$(sqlScript).sql -Verbose' 
+          condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'master'))
+          displayName: 'Executing script $(sqlScript)'
+
+  - stage: buildingRestoreZip
+    displayName: 'Building, Restore & ZIP'
+
+    jobs:
+      - job: restoreBuildAndZip
+        displayName: 'Restore, Build & Zip Azure Functions'
+        pool:
+          vmImage: 'windows-latest'
+
+        steps:
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            projects: $(mainProject)
+            command: 'restore'
+          displayName: 'Restoring [$(mainProject)]'
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            projects: $(mainProject)
+            command: 'build'
+            arguments: '--configuration $(buildConf) --no-restore'
+          displayName: 'Building [$(mainProject)] Config $(buildConf)'
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            command: restore
+            projects: '$(testProject)'
+            feedsToUse: 'config'
+            nugetConfigPath: 'nuget.config'
+          displayName: 'Restore Business Tests'
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            command: test
+            projects: '$(testProject)'
+            arguments: '--configuration $(buildConf)'
+          displayName: 'Running Business Tests'
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            command: 'publish'
+            #Keep false, otherwise all Azure functions will be skip
+            publishWebProjects: false
+            zipAfterPublish: true
+            projects: $(mainProject)
+            arguments: --output $(output) --configuration $(buildConf)
+          displayName: 'Ziping (Publish) [$(mainProject)]. WebProjects false, Zip true'
+
+        ## Move zip files to ArtifactStagingDirectory, for deployment
+        - task: CopyFiles@2
+          inputs:
+            contents: $(output)\*.zip
+            targetFolder: $(Build.ArtifactStagingDirectory)
+          displayName: 'Copying Zip files to [$(Build.ArtifactStagingDirectory)]'
+
+        ## == For Rule Actor Service Fabric ==
+        # - task: DotNetCoreCLI@2
+        #   inputs:
+        #     projects: $(actorProject)
+        #     command: 'restore'
+        #     feedsToUse: 'config'
+        #     nugetConfigPath: 'nuget.config'
+        #   displayName: 'Restoring Rule Actor [$(actorProject)] Branch [$(Build.SourceBranchName)]'
+
+        # Zip and allocate the zip archive into 'ArtifactStagingDirectory', then use PublishBuildArtifacts@1
+        # - task: ArchiveFiles@2
+        #   inputs:
+        #     rootFolderOrFile: '$(actorProjectDirToZip)'
+        #     includeRootFolder: false
+        #     archiveType: 'zip'
+        #     archiveFile: '$(Build.ArtifactStagingDirectory)\$(actorProjectZip)'
+        #     replaceExistingArchive: true
+        #     verbose: true
+        #   displayName: 'Zipping Rule Actor Project'
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+            ArtifactName: '$(artifactName)'
+            publishLocation: 'Container'
+          displayName: 'Uploading Zip files'

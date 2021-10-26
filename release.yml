@@ -1,0 +1,180 @@
+resources:
+  pipelines:
+  - pipeline: proyect-name
+    source : '<pipeline name created in dev.azure.com, pipelines>'
+    trigger: 
+      branches:
+        include:
+          - develop
+          - master
+
+trigger : none
+
+variables:
+
+  - name: actorProjectZip
+    value : actor.zip
+
+  - name : artifactName
+    value : '<sub dir>/ZipProjects'
+
+  - name: packageDir
+    value : D:\a\1\$(artifactName)\publish\
+  
+  - name: actorDirZip
+    value : D:\a\1\$(artifactName)\$(actorProjectZip)
+
+  ## Azure common configuration
+  - name :  azureSubscription
+    value : 'ICE PayAsYouGo EA - Azure Sub 89780439-fb9b-4f7b-bf37-115569216afe'
+
+  ## Dev values
+  - name :  resourceGroup
+    value : stays-<name>-dev-rg-usc
+  ## Prod values
+  - name :  resourceGroupProd
+    value : stays-<name>-prod-rg-usc  
+
+  ## Azure Slot value
+  - name :  toSlot
+    value : false     #If true the Azure function will deploy into the 'slot'
+
+  ## Azure functions 
+  ## Main Azure Function 
+  - name :  mainAF
+    value : mainAFZipArchive  
+  - name :  mainSlot
+    value : '<slotNameForMainAF>'  
+  ## Azure Function, App Name 
+  # AKA Repository Site Name/Resource Name, Left part before .azurewebsites.net
+  - name :  mainAppName
+    value : 'stays-<name>-fnapp-dev-usc'
+
+  #Service fabric
+  - name : actorPkgZip
+    value: <package obtained packing sfproj>.zip
+    
+  - name : sfCnxName
+    value : '<cluster name>'
+  - name : sfCnxNameProd
+    value : '<cluster name>'
+
+stages:
+  - stage: Dev
+    condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'develop'))
+    displayName: 'Development Deployment'
+
+    jobs:
+
+      - deployment: Development
+        pool:
+          vmImage: 'windows-latest'
+
+        environment: <Created into Azure DevOps - Environments>
+
+        strategy:
+          runOnce:
+            deploy:              
+              steps:
+
+                # - task: ExtractFiles@1
+                #   inputs:
+                #     archiveFilePatterns: '$(actorDirZip)'
+                #     destinationFolder: '$(Build.ArtifactStagingDirectory)'
+                #     cleanDestinationFolder: true
+                #     overwriteExistingFiles: false
+                #   displayName: 'Rule Actor Unzip'
+
+                ## Service Fabric
+                # - task: ExtractFiles@1
+                #   inputs:
+                #     archiveFilePatterns: '$(Build.ArtifactStagingDirectory)\$(actorPkgZip)'
+                #     destinationFolder: '$(Build.ArtifactStagingDirectory)'
+                #     cleanDestinationFolder: false
+                #     overwriteExistingFiles: false
+                #   displayName: 'Rule Actor PKG Unzip'
+
+                # - task: ServiceFabricDeploy@1
+                #   inputs:
+                #     applicationPackagePath: '$(Build.ArtifactStagingDirectory)'
+                #     serviceConnectionName: '$(sfCnxName)'
+                #     publishProfilePath: '$(Build.ArtifactStagingDirectory)/PublishProfiles/CloudDev.xml'
+                #     applicationParameterPath: '$(Build.ArtifactStagingDirectory)/ApplicationParameters/CloudDev.xml'
+                #     overwriteBehavior: Always
+                #     skipUpgradeSameTypeAndVersion: true
+                #     overridePublishProfileSettings: true
+                #     isUpgrade: false
+                #   displayName: 'Rule Actor Deploy'
+
+                - task: AzureFunctionApp@1
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appType: 'functionApp'
+                    # AKA Repository Site Name/Resource Name, Left part before .azurewebsites.net
+                    appName: $(mainAppName)
+                    package: '$(packageDir)$(mainAF).zip'
+                    deploymentMethod: 'auto'
+                    deployToSlotOrASE: $(toSlot)
+                    resourceGroupName: $(resourceGroup)
+                    slotName: '$(mainSlot)'
+                  displayName: 'Deploy to [$(mainAF)] Azure Function AZ [$(azureSubscription)] RGN [$(resourceGroup)]'
+
+  - stage: Prod
+    condition: and(succeeded(), eq(variables['Build.SourceBranchName'], 'master'))
+    dependsOn: Dev
+    displayName: 'Production Deployment'
+
+    jobs:
+
+      - deployment: Production
+        pool:
+          vmImage: 'windows-latest'
+
+        environment: <Created into Azure DevOps - Environments>
+
+        strategy:
+          runOnce:
+            deploy:              
+              steps:
+
+                # - task: ExtractFiles@1
+                #   inputs:
+                #     archiveFilePatterns: '$(actorDirZip)'
+                #     destinationFolder: '$(Build.ArtifactStagingDirectory)'
+                #     cleanDestinationFolder: true
+                #     overwriteExistingFiles: false
+                #   displayName: 'Rule Actor Unzip'
+
+                ## Service Fabric
+                # - task: ExtractFiles@1
+                #   inputs:
+                #     archiveFilePatterns: '$(Build.ArtifactStagingDirectory)\$(actorPkgZip)'
+                #     destinationFolder: '$(Build.ArtifactStagingDirectory)'
+                #     cleanDestinationFolder: false
+                #     overwriteExistingFiles: false
+                #   displayName: 'Rule Actor PKG Unzip'
+
+                # - task: ServiceFabricDeploy@1
+                #   inputs:
+                #     applicationPackagePath: '$(Build.ArtifactStagingDirectory)'
+                #     serviceConnectionName: '$(sfCnxName)'
+                #     publishProfilePath: '$(Build.ArtifactStagingDirectory)/PublishProfiles/CloudDev.xml'
+                #     applicationParameterPath: '$(Build.ArtifactStagingDirectory)/ApplicationParameters/CloudDev.xml'
+                #     overwriteBehavior: Always
+                #     skipUpgradeSameTypeAndVersion: true
+                #     overridePublishProfileSettings: true
+                #     isUpgrade: false
+                #   displayName: 'Rule Actor Deploy'
+
+                - task: AzureFunctionApp@1
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appType: 'functionApp'
+                    # AKA Repository Site Name/Resource Name, Left part before .azurewebsites.net
+                    appName: $(mainAppName)
+                    package: '$(packageDir)$(mainAF).zip'
+                    deploymentMethod: 'auto'
+                    deployToSlotOrASE: $(toSlot)
+                    resourceGroupName: $(resourceGroup)
+                    slotName: '$(mainSlot)'
+                  displayName: 'Deploy to [$(mainAF)] Azure Function AZ [$(azureSubscription)] RGN [$(resourceGroup)]'
